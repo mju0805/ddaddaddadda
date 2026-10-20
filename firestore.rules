@@ -1,0 +1,55 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function memberPath(tripID) {
+      return /databases/$(database)/documents/trips/$(tripID)/members/$(request.auth.uid);
+    }
+
+    function isMember(tripID) {
+      return signedIn() && exists(memberPath(tripID));
+    }
+
+    function isOwnMemberDocument(memberDocumentID) {
+      return signedIn() && memberDocumentID == request.auth.uid;
+    }
+
+    match /inviteCodes/{code} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.tripID is string
+        && getAfter(/databases/$(database)/documents/trips/$(request.resource.data.tripID)).data.createdBy == request.auth.uid;
+      allow update, delete: if isMember(resource.data.tripID);
+    }
+
+    match /trips/{tripID} {
+      allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid;
+      allow read, update: if isMember(tripID);
+      allow delete: if signedIn() && resource.data.createdBy == request.auth.uid;
+
+      match /members/{memberDocumentID} {
+        allow create: if isOwnMemberDocument(memberDocumentID)
+          && existsAfter(/databases/$(database)/documents/trips/$(tripID));
+        allow read: if isMember(tripID);
+        allow update, delete: if isOwnMemberDocument(memberDocumentID);
+      }
+
+      match /places/{placeID} {
+        allow read: if isMember(tripID);
+        allow create: if isMember(tripID)
+          && request.resource.data.ownerID == get(memberPath(tripID)).data.memberID;
+        allow update, delete: if isMember(tripID)
+          && resource.data.ownerID == get(memberPath(tripID)).data.memberID;
+      }
+
+      match /scheduleItems/{scheduleID} {
+        allow read, create, update, delete: if isMember(tripID);
+      }
+    }
+  }
+}
